@@ -1,0 +1,165 @@
+Map.addLayer(roi, {color: '000000'}, 'Analysis Region');
+
+var image = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2'); //Landsat 8, level 2, surface reflectance
+
+// mask fill, cloud, and cloud shadow, and scale image
+function prepL8SR(image){
+  //mask unwanted pixels
+  var qaMask = image.select('QA_PIXEL').bitwiseAnd(parseInt('11111', 2)).eq(0);
+  var saturationMask = image.select('QA_RADSAT').eq(0);
+  //apply scaling factors
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+  //apply masks to scaled optical bands
+  return image.addBands(opticalBands, null, true).updateMask(qaMask).updateMask(saturationMask);
+}
+
+
+//filter dates
+var filtered = image.filter(ee.Filter.calendarRange(12, 5, 'month')); //available dates ('2013-04-11' - present)
+
+//display composite
+var rgbVis = {
+  bands: ['SR_B4', 'SR_B3', 'SR_B2'],
+  min: 0,
+  max: 0.4
+};
+
+var masked = filtered.map(prepL8SR); //apply mask and scaling function
+var median = masked.median(); //create median composite
+var clipped = median.clip(roi); //clip median composite to roi
+
+Map.addLayer(clipped, rgbVis, 'Median Composite'); //add clipped image as layer to the map
+
+print(filtered.size());//print report on number of tiles
+
+
+//old script
+var roi = ee.FeatureCollection('projects/ee-southcentralandeslandcover/assets/Pukara_survey_area_40kBuffer');
+Map.addLayer(roi, {color: '000000'}, 'Analysis Region');
+
+// create terrain indices
+var ALOSDSMDEM = ee.Image('JAXA/ALOS/AW3D30_V1_1');
+var ALOSDM = ALOSDSMDEM.select('AVE').toDouble().clip (roi).rename("ELEVATION");
+var SLOPE_F = ee.Terrain.slope(ALOSDM).toDouble().clip (roi).rename("SLOPE");
+var ASPECT_F = ee.Terrain.aspect(ALOSDM).toDouble().rename("ASPECT");
+var SIN_ASPECT =
+ASPECT_F.divide(180).multiply(Math.PI).sin().toDouble().rename("SINE_ASPECT");
+
+//mask unwanted pixels (fill, cloud, cloud shadow)
+function prepL8SR(image){
+  //mask unwanted pixels
+  var qaMask = image.select('QA_PIXEL').bitwiseAnd(parseInt('11111', 2)).eq(0);
+  var saturationMask = image.select('QA_RADSAT').eq(0);
+  //apply scaling factors
+  var opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2);
+  var thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0);
+  //apply masks to scaled optical bands
+  return image.addBands(opticalBands, null, true).updateMask(qaMask).updateMask(saturationMask);
+}
+  
+// filter imagery
+var IMGLandsat8= ee.ImageCollection ('LANDSAT/LC08/C02/T1_L2'); //Landsat 8, level 2, surface reflectance
+ee.Filter.calendarRange(5, 10, 'month'); //available dates ('2013-04-11' - present)
+ee.Filter.bounds (roi);
+
+var lXmask = IMGLandsat8.map(prepL8SR);
+var Landsat8_NRG1 = ee.Image(lXmask.median());
+var Landsat8a = Landsat8_NRG1.clip (roi)
+.select(['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7'])
+.rename(['blue','green','red','nir','swir1','swir2'])
+.toDouble();
+var Landsat8 = (Landsat8a.select('blue','green','red','nir','swir1','swir2')
+.divide((Landsat8a.select('blue','green','red','nir','swir1','swir2')
+.reduce(ee.Reducer.sum())).divide(ee.Number(6))))
+.multiply(ee.Number(100));
+
+//display composite
+var rgbVis = {
+  bands: ['red', 'green', 'blue'],
+  min: 0,
+  max: 0.4
+};
+Map.addLayer(Landsat8a, rgbVis, 'Composite')
+
+//add palettes
+var palettes = require('users/gena/packages:palettes');
+var palette = palettes.colorbrewer.RdYlGn[3,4,5,6,7,8,9,10,11];
+
+//NDVI
+var addNDVI = function(imagen){
+  var NIR='SR_B5';
+  var RED = 'SR_B4';
+  var ndvi=imagen.normalizedDifference([NIR, RED]). rename('NDVI');
+  return imagen.addBands(ndvi).select('NDVI')};
+  var ndvi=addNDVI(clipped).select('NDVI').toDouble().rename("NDVI");
+  var NDVI_FIN = ndvi.clamp(-1, 1);
+  print(NDVI_FIN,"NDVI_FIN")
+Map.addLayer(NDVI_FIN,{min: 0, max: 1, palette: palette}, "ndvi", false);
+
+//Normalized Burn Ratio
+var addNBR=function(imagen){
+var NIR='SR_B5';
+var SWIR1='SR_B6';
+var nbr= imagen.normalizedDifference([NIR, SWIR1]).rename('NBR');
+return imagen.addBands(nbr).select('NBR')};
+var NBR = addNBR(clipped).select('NBR').toDouble().rename("NBR");
+var NBR_FIN = NBR.clamp(-1, 1);
+print(NBR_FIN,"NBR_FIN")
+Map.addLayer(NBR_FIN,{min: -1, max: 1, palette: palette},"NBR");
+
+// Normalized Difference Builtup Index (NDBI) NDBI = (SWIR1 – NIR) / (SWIR1 + NIR)
+var addNDBI=function(imagen){
+var NIR='nir';
+var SWIR1='swir1';
+var ndbi= imagen.normalizedDifference([SWIR1,NIR]).rename('NDBI');
+return imagen.addBands(ndbi).select('NDBI')};
+var NDBI = addNDBI(Landsat8).select('NDBI').toDouble().rename("NDBI");
+var NDBI_FIN = NDBI.clamp(-1, 1);
+print(NDBI_FIN,"NDBI_FIN")
+Map.addLayer(NDBI_FIN,{min: 0, max: 1},"NDBI");
+
+// Normalized Difference Water Index (NDWI) NDWI = (Green – NIR) / (Green + NIR)
+var addNDWI=function(imagen){
+var NIR='nir';
+var GREEN='green';
+var ndwi= imagen.normalizedDifference([GREEN, NIR]).rename('NDWI');
+return imagen.addBands(ndwi).select('NDWI')};
+var NDWI = addNDWI(Landsat8).select('NDWI').toDouble().rename("NDWI");
+var NDWI_FIN = NDWI.clamp(-1, 1);
+print(NDWI_FIN,"NDWI_FIN")
+Map.addLayer(NDWI_FIN,{min: 0, max: 1, palette: paletteBrownBlue},"NDWI");
+
+// NDSI.
+var addNDSI=function(imagen){
+var GREEN='XXX';
+var SWIR1='XXX';
+var ndsi= imagen.normalizedDifference([GREEN, SWIR1]).rename('NDSI');
+return imagen.addBands(ndsi).select('NDSI')};
+var NDSI = addNDSI(XXX).select('NDSI').toDouble().rename("NDSI");
+var NDSI_FIN = NDSI.clamp(-1, 1);
+print(NDSI_FIN,"NDSI_FIN")
+Map.addLayer(NDSI_FIN,{min: 0, max: 1, palette: XXX},"NDSI");
+
+// MSAVI
+var MSAVI = XXX.select('XXX').multiply(2).add(1)
+.subtract(XXX.select('XXX').multiply(2).add(1).pow(2)
+.subtract(XXX.select('XXX').subtract(Landsat8.select('XXX')).multiply(8)).sqrt()
+).divide(2)
+var MSAVI_FIN = MSAVI.toDouble().rename("MSAVI");
+print(MSAVI_FIN,"MSAVI_FIN")
+Map.addLayer(MSAVI_FIN,{min: 0, max: 0.5, palette: XXX},"MSAVI_FIN");
+
+// Enhanced Vegetation Index (EVI)
+var EVI1 = ((Landsat8.select('nir').subtract(Landsat8.select('red')))
+.divide(Landsat8.select('nir').add(((Landsat8.select('red').multiply(6))
+.subtract(Landsat8.select('blue').multiply(7.5))).add(1)))).multiply(2.5)
+var EVI = EVI1.toDouble().rename("EVI");
+print (EVI, 'EVI')
+Map.addLayer(EVI, {min: -1, max: 1}, 'EVI');
+
+// Spectral Variability Vegetation Index (SVVI)
+var SVV1a = Landsat8.select('blue','green','red','nir','swir1','swir2').reduce(ee.Reducer.stdDev());
+var SVV1b = Landsat8.select('nir','swir1','swir2').reduce(ee.Reducer.stdDev());
+var SVVI = SVV1a.subtract(SVV1b).rename("SVVI");
+
